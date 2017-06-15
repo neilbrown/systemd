@@ -83,6 +83,9 @@ static bool mount_needs_network(const char *options, const char *fstype) {
 static bool mount_is_network(const MountParameters *p) {
         assert(p);
 
+        if (strneq(p->what, "/dev/loop", 9))
+                /* Treat loop devices as network - they might be */
+                return true;
         return mount_needs_network(p->options, p->fstype);
 }
 
