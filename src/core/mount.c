@@ -788,6 +788,10 @@ static int mount_spawn(Mount *m, ExecCommand *c, pid_t *_pid) {
         if (r < 0)
                 return r;
 
+        /* We must process /proc/self/mountinfo updates from
+         * the mount immediately, so record that it is pending.
+         */
+        UNIT(m)->manager->mount_pending_count++;
         r = exec_spawn(UNIT(m),
                        c,
                        &m->exec_context,
@@ -795,13 +799,17 @@ static int mount_spawn(Mount *m, ExecCommand *c, pid_t *_pid) {
                        m->exec_runtime,
                        &m->dynamic_creds,
                        &pid);
-        if (r < 0)
+        if (r < 0) {
+                UNIT(m)->manager->mount_pending_count--;
                 return r;
+        }
 
         r = unit_watch_pid(UNIT(m), pid);
-        if (r < 0)
+        if (r < 0) {
+                UNIT(m)->manager->mount_pending_count--;
                 /* FIXME: we need to do something here */
                 return r;
+        }
 
         *_pid = pid;
 
@@ -1271,6 +1279,7 @@ static void mount_sigchld_event(Unit *u, pid_t pid, int code, int status) {
         if (pid != m->control_pid)
                 return;
 
+        u->manager->mount_pending_count--;
         m->control_pid = 0;
 
         if (is_clean_exit(code, status, EXIT_CLEAN_COMMAND, NULL))
@@ -1790,7 +1799,8 @@ static int mount_dispatch_io(sd_event_source *source, int fd, uint32_t revents, 
         usec_t next_read = usec_add(m->mount_last_read_usec,
                                     m->mount_last_duration_usec * 10);
 
-        if (now(CLOCK_MONOTONIC) < next_read) {
+        if (m->mount_pending_count == 0 &&
+            now(CLOCK_MONOTONIC) < next_read) {
                 /* The (current) API for getting mount events from the Linux kernel
                  * involves getting a "something changed" notification, and then having
                  * to re-read the entire /proc/self/mountinfo file.  When there are lots
